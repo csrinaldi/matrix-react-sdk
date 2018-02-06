@@ -62,34 +62,35 @@ class RoomListStore extends Store {
             break;
             case 'MatrixActions.Room.tags': {
                 if (!this._state.ready) break;
-                this._updateRoomLists(payload.room);
+                console.info(payload);
+                this._generateRoomLists();
             }
             break;
             case 'MatrixActions.accountData': {
                 if (payload.event_type !== 'm.direct') break;
+                console.info(payload);
                 this._generateRoomLists();
             }
             break;
             case 'MatrixActions.RoomMember.membership': {
                 if (!this._matrixClient || payload.member.userId !== this._matrixClient.credentials.userId) break;
+                console.info(payload);
                 this._generateRoomLists();
             }
             break;
             case 'RoomListActions.tagRoom.pending': {
-                this._updateRoomListsOptimistic(
-                    payload.request.room,
-                    payload.request.oldTag,
-                    payload.request.newTag,
-                    payload.request.metaData,
-                );
+                console.info(payload);
+                this._generateRoomLists(payload.request);
             }
             break;
             case 'RoomListActions.tagRoom.failure': {
+                console.info(payload);
                 // Reset state according to js-sdk
                 this._generateRoomLists();
             }
             break;
             case 'on_logged_out': {
+                console.info(payload);
                 // Reset state without pushing an update to the view, which generally assumes that
                 // the matrix client isn't `null` and so causing a re-render will cause NPEs.
                 this._init();
@@ -98,71 +99,7 @@ class RoomListStore extends Store {
         }
     }
 
-    _updateRoomListsOptimistic(updatedRoom, oldTag, newTag, metaData) {
-        const newLists = {};
-
-        // Adding a tag to an untagged room - need to remove it from recents
-        if (newTag && Object.keys(updatedRoom.tags).length === 0) {
-            oldTag = 'im.vector.fake.recent';
-        }
-
-        // Removing a tag from a room with one tag left - need to add it to recents
-        if (oldTag && Object.keys(updatedRoom.tags).length === 1) {
-            newTag = 'im.vector.fake.recent';
-        }
-
-        // Remove room from oldTag
-        Object.keys(this._state.lists).forEach((tagName) => {
-            if (tagName === oldTag) {
-                newLists[tagName] = this._state.lists[tagName].filter((room) => {
-                    return room.roomId !== updatedRoom.roomId;
-                });
-            } else {
-                newLists[tagName] = this._state.lists[tagName];
-            }
-        });
-
-        /// XXX: RoomSubList sorts by data on the room object. We
-        /// should sort in advance and incrementally insert new rooms
-        /// instead of resorting every time.
-        if (metaData) {
-            updatedRoom.tags[newTag] = metaData;
-        }
-
-        newLists[newTag].push(updatedRoom);
-
-        this._setState({
-            lists: newLists,
-        });
-    }
-
-    _updateRoomLists(updatedRoom) {
-        const roomTags = Object.keys(updatedRoom.tags);
-
-        const newLists = {};
-
-        // Removal of the updatedRoom from tags it no longer has
-        Object.keys(this._state.lists).forEach((tagName) => {
-            newLists[tagName] = this._state.lists[tagName].filter((room) => {
-                return room.roomId !== updatedRoom.roomId || roomTags.includes(tagName);
-            });
-        });
-
-        roomTags.forEach((tagName) => {
-            if (newLists[tagName].includes(updatedRoom)) return;
-            newLists[tagName].push(updatedRoom);
-        });
-
-        if (roomTags.length === 0) {
-            newLists['im.vector.fake.recent'].unshift(updatedRoom);
-        }
-
-        this._setState({
-            lists: newLists,
-        });
-    }
-
-    _generateRoomLists() {
+    _generateRoomLists(optimisticRequest) {
         const lists = {
             "im.vector.fake.invite": [],
             "m.favourite": [],
@@ -187,7 +124,20 @@ class RoomListStore extends Store {
             } else if (me.membership == "join" || me.membership === "ban" ||
                      (me.membership === "leave" && me.events.member.getSender() !== me.events.member.getStateKey())) {
                 // Used to split rooms via tags
-                const tagNames = Object.keys(room.tags);
+                let tagNames = Object.keys(room.tags);
+
+                if (optimisticRequest && optimisticRequest.room === room) {
+                    // Remove old tag
+                    tagNames = tagNames.filter((tagName) => tagName !== optimisticRequest.oldTag);
+                    // Add new tag
+                    if (optimisticRequest.newTag &&
+                        !tagNames.includes(optimisticRequest.newTag)
+                    ) {
+                        tagNames.push(optimisticRequest.newTag);
+                    }
+                    console.info('New tags optimistically', room.roomId, tagNames);
+                }
+
                 if (tagNames.length) {
                     for (let i = 0; i < tagNames.length; i++) {
                         const tagName = tagNames[i];
